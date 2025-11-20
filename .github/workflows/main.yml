@@ -140,25 +140,46 @@ jobs:
     if: env.bhwj == '1'
     run: cp /tmp/_worker.js _worker.js
   
-  - name: 下载上游 Release 文件
-    if: env.xzwj == '1'
-    run: |
-     RESPONSE=$(curl -s -H "Authorization: token ${{secrets.pat}}" https://api.github.com/repos/${{github.repository}})
-     UPSTREAM_REPO=$(echo "$RESPONSE" | jq -r '.parent.full_name')
-     AUTHOR=$(echo "$UPSTREAM_REPO" | cut -d '/' -f 1)
-     REPO=$(echo "$UPSTREAM_REPO" | cut -d '/' -f 2)
-     
-     DOWNLOAD_URL=$(curl -s https://api.github.com/repos/$AUTHOR/$REPO/releases/latest \
-     | jq -r '.assets[] | select(.name | test("worker\\.js$")) | .browser_download_url')
-
-     if [[ "$DOWNLOAD_URL" == *"_worker.js" ]]; then
-       curl -sSL -o _worker.js "$DOWNLOAD_URL"
-     elif [[ "$DOWNLOAD_URL" == *"worker.js" ]]; then
-       curl -sSL "$DOWNLOAD_URL" -o _worker.js
-     else
-       echo "未找到匹配的 worker.js 或 _worker.js 资源"
-       exit 1
-     fi
+       - name: 下载上游 Release 文件
+        if: steps.check.outputs.should_sync == 'true'
+        run: |
+          # 获取仓库信息
+          RESPONSE=$(curl -s -H "Authorization: token ${{ secrets.PAT }}" https://api.github.com/repos/${{ github.repository }})
+          
+          # 检查是否是 fork 仓库并获取上游信息
+          UPSTREAM_REPO=$(echo "$RESPONSE" | jq -r '.parent.full_name // empty')
+          
+          # 如果没有上游信息，使用默认上游
+          if [ -z "$UPSTREAM_REPO" ] || [ "$UPSTREAM_REPO" == "null" ]; then
+            echo "未检测到上游仓库，使用默认上游"
+            UPSTREAM_REPO="bia-pain-bache/BPB-Worker-Panel"
+          fi
+          
+          echo "上游仓库: $UPSTREAM_REPO"
+          AUTHOR=$(echo "$UPSTREAM_REPO" | cut -d '/' -f 1)
+          REPO=$(echo "$UPSTREAM_REPO" | cut -d '/' -f 2)
+          
+          # 获取最新 Release 的 worker.js 文件
+          DOWNLOAD_URL=$(curl -s https://api.github.com/repos/$AUTHOR/$REPO/releases/latest \
+            | jq -r '.assets[] | select(.name | test("worker\\.js$")) | .browser_download_url' \
+            | head -n 1)
+          
+          if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" == "null" ]; then
+            echo "未找到 Release 中的 worker.js 文件，尝试从源码获取"
+            # 备用方案：直接克隆仓库
+            git clone --depth 1 https://github.com/$UPSTREAM_REPO /tmp/upstream
+            if [ -f "/tmp/upstream/_worker.js" ]; then
+              cp "/tmp/upstream/_worker.js" _worker.js
+            elif [ -f "/tmp/upstream/worker.js" ]; then
+              cp "/tmp/upstream/worker.js" _worker.js
+            else
+              echo "错误: 未找到 worker.js 文件"
+              exit 1
+            fi
+          else
+            echo "下载地址: $DOWNLOAD_URL"
+            curl -sSL -o _worker.js "https://github.com/bia-pain-bache/BPB-Worker-Panel/releases/download/v4.0.1/worker.js"
+          fi
   
   - name: 混淆 _worker.js
     if: env.hxwj == '1'
