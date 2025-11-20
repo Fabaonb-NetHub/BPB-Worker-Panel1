@@ -137,48 +137,49 @@ jobs:
       - name: 下载上游 Release 文件
         if: env.xzwj == '1'
         run: |
-          # 获取仓库信息
-          RESPONSE=$(curl -s -H "Authorization: token ${{ secrets.pat }}" "https://api.github.com/repos/${{ github.repository }}")
-          
-          # 检查是否是 fork 仓库并获取上游信息
-          UPSTREAM_REPO=$(echo "$RESPONSE" | jq -r '.parent.full_name // empty')
-          
-          # 如果没有上游信息，使用默认上游
-          if [ -z "$UPSTREAM_REPO" ] || [ "$UPSTREAM_REPO" == "null" ]; then
-            echo "未检测到上游仓库，使用默认上游"
-            UPSTREAM_REPO="bia-pain-bache/BPB-Worker-Panel"
-          fi
+          # 直接使用真正的上游仓库（不依赖 API 检测）
+          UPSTREAM_REPO="bia-pain-bache/BPB-Worker-Panel"
           
           echo "上游仓库: $UPSTREAM_REPO"
           AUTHOR=$(echo "$UPSTREAM_REPO" | cut -d '/' -f 1)
           REPO=$(echo "$UPSTREAM_REPO" | cut -d '/' -f 2)
           
-          # 获取最新 Release 的 worker.js 文件
+          # 获取最新 Release 信息
           echo "正在获取 Release 信息..."
-          DOWNLOAD_URL=$(curl -s "https://api.github.com/repos/$AUTHOR/$REPO/releases/latest" \
-            | jq -r '.assets[] | select(.name | test("worker\\.js$")) | .browser_download_url' \
-            | head -n 1)
+          RELEASE_DATA=$(curl -s "https://api.github.com/repos/$AUTHOR/$REPO/releases/latest")
           
-          echo "下载 URL: $DOWNLOAD_URL"
+          # 检查 Release 是否存在
+          if echo "$RELEASE_DATA" | jq -e '.message' > /dev/null 2>&1; then
+            echo "错误: 无法获取 Release 信息"
+            echo "$RELEASE_DATA" | jq -r '.message'
+            exit 1
+          fi
+          
+          # 尝试匹配多种文件名模式
+          DOWNLOAD_URL=$(echo "$RELEASE_DATA" | jq -r '.assets[] | select(.name | test("worker\\.js$|_worker\\.js$")) | .browser_download_url' | head -n 1)
           
           if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" == "null" ]; then
-            echo "未找到 Release 中的 worker.js 文件，尝试从源码获取"
-            # 备用方案：直接克隆仓库
-            git clone --depth 1 "https://github.com/$UPSTREAM_REPO" /tmp/upstream
-            if [ -f "/tmp/upstream/_worker.js" ]; then
-              cp "/tmp/upstream/_worker.js" _worker.js
-              echo "从源码复制 _worker.js 成功"
-            elif [ -f "/tmp/upstream/worker.js" ]; then
-              cp "/tmp/upstream/worker.js" _worker.js
-              echo "从源码复制 worker.js 成功"
-            else
-              echo "错误: 未找到 worker.js 文件"
+            echo "未找到匹配的 worker.js 文件"
+            echo "可用的文件列表:"
+            echo "$RELEASE_DATA" | jq -r '.assets[].name'
+            
+            # 尝试下载任何包含 worker 的 js 文件
+            DOWNLOAD_URL=$(echo "$RELEASE_DATA" | jq -r '.assets[] | select(.name | contains("worker") and endswith(".js")) | .browser_download_url' | head -n 1)
+            
+            if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" == "null" ]; then
+              echo "错误: 未找到任何 worker.js 相关文件"
               exit 1
             fi
-          else
-            echo "开始下载: $DOWNLOAD_URL"
-            curl -sSL -o _worker.js "$DOWNLOAD_URL"
+          fi
+          
+          echo "下载 URL: $DOWNLOAD_URL"
+          echo "开始下载..."
+          
+          if curl -sSL -o _worker.js "$DOWNLOAD_URL"; then
             echo "下载完成"
+          else
+            echo "错误: 下载失败"
+            exit 1
           fi
           
           # 验证文件是否存在
